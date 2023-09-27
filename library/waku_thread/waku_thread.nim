@@ -21,6 +21,7 @@ import
 type
   Context* = object
     thread: Thread[(ptr Context)]
+    userData*: pointer
     reqChannel: ChannelSPSCSingle[ptr InterThreadRequest]
     reqSignal: ThreadSignalPtr
     respChannel: ChannelSPSCSingle[ptr InterThreadResponse]
@@ -70,7 +71,7 @@ proc run(ctx: ptr Context) {.thread.} =
 
   tearDownForeignThreadGc()
 
-proc createWakuThread*(): Result[void, string] =
+proc createWakuThread*(): Result[ptr Context, string] =
   ## This proc is called from the main thread and it creates
   ## the Waku working thread.
 
@@ -92,7 +93,7 @@ proc createWakuThread*(): Result[void, string] =
 
     return err("failed to create the Waku thread: " & getCurrentExceptionMsg())
 
-  return ok()
+  return ok(ctx)
 
 proc stopWakuNodeThread*() =
   running.store(false)

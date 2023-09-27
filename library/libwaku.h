@@ -15,17 +15,23 @@
 extern "C" {
 #endif
 
-typedef void (*WakuCallBack) (const char* msg, size_t len_0);
+typedef void (*WakuCallBack) (const char* msg,
+                              size_t len_0,
+                              void* userData);
 
 // Creates a new instance of the waku node.
 // Sets up the waku node from the given configuration.
-int waku_new(const char* configJson, WakuCallBack onErrCb);
+void* waku_new(const char* configJson,
+               WakuCallBack onErrCb,
+               void* user_data);
 
 void waku_start(void);
 
 void waku_stop(void);
 
-int waku_version(WakuCallBack onOkCb);
+int waku_version(void* ctx,
+                 WakuCallBack onOkCb,
+                 void* userData);
 
 void waku_set_event_callback(WakuCallBack callback);
 
@@ -36,9 +42,12 @@ int waku_content_topic(const char* appName,
                        WakuCallBack onOkCb);
 
 int waku_pubsub_topic(const char* topicName,
-                      WakuCallBack onOkCb);
+                      WakuCallBack onOkCb,
+                      void* userData);
 
-int waku_default_pubsub_topic(WakuCallBack onOkCb);
+int waku_default_pubsub_topic(void* ctx,
+                              WakuCallBack onOkCb,
+                              void* userData);
 
 int waku_relay_publish(const char* pubSubTopic,
                        const char* jsonWakuMessage,

@@ -599,7 +599,29 @@ proc startRestServer(app: App, address: ValidIpAddress, port: Port, conf: WakuNo
     rest_filter_api.installFilterRestApiHandlers(server.router, app.node, filterCache)
 
   ## Store REST API
-  installStoreApiHandlers(server.router, app.node)
+  let disco = 
+    if app.wakudiscv5.isNone():
+      none(DiscoveryHandler)
+    else:
+      let discv5 = app.wakudiscv5.get()
+
+      let handler = proc(): Future[Result[Option[RemotePeerInfo], string]] {.async, closure.} =
+        #Discv5 is already filtering peers by shards no need to pass a predicate.
+        var peers = await discv5.findRandomPeers()
+
+        peers.keepItIf(it.supportsCapability(Store))
+
+        if peers.len == 0:
+          return ok(none(RemotePeerInfo))
+
+        let remotePeerInfo = peers[0].toRemotePeerInfo().valueOr:
+          return err($error)
+
+        return ok(some(remotePeerInfo))
+
+      some(handler)
+
+  installStoreApiHandlers(server.router, app.node, disco)
 
   ## Light push API
   rest_lightpush_api.installLightPushRequestHandler(server.router, app.node)

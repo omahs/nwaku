@@ -15,6 +15,7 @@ import
   ../../../waku_store/common,
   ../../../waku_node,
   ../../../node/peer_manager,
+  ../../handlers,
   ../responses,
   ../serdes,
   ./types
@@ -182,13 +183,11 @@ proc toOpt(self: Option[Result[string, cstring]]): Option[string] =
   if self.isSome() and self.get().value != "":
     return some(self.get().value)
 
-type DiscoveryHandler* = proc(): Future[Result[Option[RemotePeerInfo], string]] {.async, closure.}
-
 # Subscribes the rest handler to attend "/store/v1/messages" requests
 proc installStoreApiHandlers*(
   router: var RestRouter,
   node: WakuNode,
-  discHandler: Option[DiscoveryHandler]
+  discHandler: Option[DiscoveryHandler] = none(DiscoveryHandler)
   ) =
 
   # Handles the store-query request according to the passed parameters

@@ -29,7 +29,7 @@ import
   ../../waku/node/peer_manager/peer_store/waku_peer_storage,
   ../../waku/node/peer_manager/peer_store/migrations as peer_store_sqlite_migrations,
   ../../waku/waku_api/message_cache,
-  ../../waku/waku_api/cache_handlers,
+  ../../waku/waku_api/handlers,
   ../../waku/waku_api/rest/server,
   ../../waku/waku_api/rest/debug/handlers as rest_debug_api,
   ../../waku/waku_api/rest/relay/handlers as rest_relay_api,
@@ -599,29 +599,12 @@ proc startRestServer(app: App, address: ValidIpAddress, port: Port, conf: WakuNo
     rest_filter_api.installFilterRestApiHandlers(server.router, app.node, filterCache)
 
   ## Store REST API
-  let disco = 
-    if app.wakudiscv5.isNone():
-      none(DiscoveryHandler)
-    else:
-      let discv5 = app.wakudiscv5.get()
+  let handler = 
+    if app.wakuDiscv5.isSome():
+      some(defaultDiscoveryHandler(app.wakuDiscv5.get(), Store))
+    else: none(DiscoveryHandler)
 
-      let handler = proc(): Future[Result[Option[RemotePeerInfo], string]] {.async, closure.} =
-        #Discv5 is already filtering peers by shards no need to pass a predicate.
-        var peers = await discv5.findRandomPeers()
-
-        peers.keepItIf(it.supportsCapability(Store))
-
-        if peers.len == 0:
-          return ok(none(RemotePeerInfo))
-
-        let remotePeerInfo = peers[0].toRemotePeerInfo().valueOr:
-          return err($error)
-
-        return ok(some(remotePeerInfo))
-
-      some(handler)
-
-  installStoreApiHandlers(server.router, app.node, disco)
+  installStoreApiHandlers(server.router, app.node, handler)
 
   ## Light push API
   rest_lightpush_api.installLightPushRequestHandler(server.router, app.node)

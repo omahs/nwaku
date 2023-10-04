@@ -187,7 +187,7 @@ proc toOpt(self: Option[Result[string, cstring]]): Option[string] =
 proc installStoreApiHandlers*(
   router: var RestRouter,
   node: WakuNode,
-  discHandler: Option[DiscoveryHandler] = none(DiscoveryHandler)
+  discHandler: Option[DiscoveryHandler] = none(DiscoveryHandler),
   ) =
 
   # Handles the store-query request according to the passed parameters

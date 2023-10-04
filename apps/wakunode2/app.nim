@@ -596,18 +596,34 @@ proc startRestServer(app: App, address: ValidIpAddress, port: Port, conf: WakuNo
     rest_legacy_filter_api.installLegacyFilterRestApiHandlers(server.router, app.node, legacyFilterCache)
 
     let filterCache = rest_filter_api.MessageCache.init()
-    rest_filter_api.installFilterRestApiHandlers(server.router, app.node, filterCache)
+
+    let filterDiscoHandler = 
+      if app.wakuDiscv5.isSome():
+        some(defaultDiscoveryHandler(app.wakuDiscv5.get(), Filter))
+      else: none(DiscoveryHandler)
+
+    rest_filter_api.installFilterRestApiHandlers(
+      server.router,
+      app.node,
+      filterCache,
+      filterDiscoHandler,
+    )
 
   ## Store REST API
-  let handler = 
+  let storeDiscoHandler = 
     if app.wakuDiscv5.isSome():
       some(defaultDiscoveryHandler(app.wakuDiscv5.get(), Store))
     else: none(DiscoveryHandler)
 
-  installStoreApiHandlers(server.router, app.node, handler)
+  installStoreApiHandlers(server.router, app.node, storeDiscoHandler)
 
   ## Light push API
-  rest_lightpush_api.installLightPushRequestHandler(server.router, app.node)
+  let lightDiscoHandler = 
+    if app.wakuDiscv5.isSome():
+      some(defaultDiscoveryHandler(app.wakuDiscv5.get(), Lightpush))
+    else: none(DiscoveryHandler)
+
+  rest_lightpush_api.installLightPushRequestHandler(server.router, app.node, lightDiscoHandler)
 
   server.start()
   info "Starting REST HTTP server", url = "http://" & $address & ":" & $port & "/"

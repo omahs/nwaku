@@ -161,14 +161,23 @@ proc filterPostPutSubscriptionRequestHandler(
 
   let req: FilterSubscribeRequest = decodedBody.value()
 
-  let peerOpt = node.peerManager.selectPeer(WakuFilterSubscribeCodec)
+  let peer = node.peerManager.selectPeer(WakuFilterSubscribeCodec).valueOr:
+    let handler = discHandler.valueOr:
+      return makeRestResponse(
+        req.requestId,
+        FilterSubscribeError.serviceUnavailable("No suitable peers")
+      ) 
 
-  if peerOpt.isNone():
-    return makeRestResponse(req.requestId, FilterSubscribeError.serviceUnavailable("No suitable peers"))
+    let peerOp = (await handler()).valueOr:
+      return RestApiResponse.internalServerError($error)
 
-  let subFut = node.filterSubscribe(req.pubsubTopic,
-                                      req.contentFilters,
-                                      peerOpt.get())
+    peerOp.valueOr:
+      return makeRestResponse(
+        req.requestId,
+        FilterSubscribeError.serviceUnavailable("No suitable peers")
+      )
+
+  let subFut = node.filterSubscribe(req.pubsubTopic, req.contentFilters, peer)
 
   if not await subFut.withTimeout(futTimeoutForSubscriptionProcessing):
     error "Failed to subscribe to contentFilters do to timeout!"

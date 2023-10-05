@@ -21,7 +21,12 @@ type DiscoveryHandler* = proc(): Future[Result[Option[RemotePeerInfo], string]] 
 proc defaultDiscoveryHandler*(discv5: WakuDiscoveryV5, cap: Capabilities): DiscoveryHandler =
   proc(): Future[Result[Option[RemotePeerInfo], string]] {.async, closure.} =
     #Discv5 is already filtering peers by shards no need to pass a predicate.
-    var peers = await discv5.findRandomPeers()
+    let findPeers = discv5.findRandomPeers()
+    
+    if not await findPeers.withTimeout(60.seconds):
+      return err("Discovery process  out!")
+
+    var peers = findPeers.read()
 
     peers.keepItIf(it.supportsCapability(cap))
 

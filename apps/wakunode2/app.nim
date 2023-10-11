@@ -4,10 +4,11 @@ else:
   {.push raises: [].}
 
 import
-  std/[options, strutils, sequtils],
-  stew/results,
+  std/[options, strutils, sequtils, os, sysrand],
+  stew/[results,byteutils],
   chronicles,
   chronos,
+  libp2p,
   libp2p/crypto/crypto,
   libp2p/nameresolving/dnsresolver,
   libp2p/protocols/pubsub/gossipsub,
@@ -17,6 +18,12 @@ import
   presto,
   metrics,
   metrics/chronos_httpserver
+
+from times import getTime, toUnix, fromUnix, `-`, initTime, `$`, inMilliseconds
+from nativesockets import getHostname
+from std/times import getTime
+from std/times import toUnix
+
 import
   ../../waku/common/utils/nat,
   ../../waku/common/databases/db_sqlite,
@@ -38,7 +45,6 @@ import
   ../../waku/waku_api/rest/lightpush/handlers as rest_lightpush_api,
   ../../waku/waku_api/rest/store/handlers as rest_store_api,
   ../../waku/waku_api/rest/health/handlers as rest_health_api,
-  ../../waku/waku_api/rest/admin/handlers as rest_admin_api,
   ../../waku/waku_api/jsonrpc/admin/handlers as rpc_admin_api,
   ../../waku/waku_api/jsonrpc/debug/handlers as rpc_debug_api,
   ../../waku/waku_api/jsonrpc/filter/handlers as rpc_filter_api,
@@ -50,6 +56,7 @@ import
   ../../waku/waku_discv5,
   ../../waku/waku_peer_exchange,
   ../../waku/waku_rln_relay,
+  ../../waku/waku_relay,
   ../../waku/waku_store,
   ../../waku/waku_lightpush,
   ../../waku/waku_filter,
@@ -394,10 +401,16 @@ proc setupProtocols(node: WakuNode,
     return err("failed to mount libp2p ping protocol: " & getCurrentExceptionMsg())
 
   if conf.rlnRelay:
+    # get the rln credentials index to use from the hostname
+    # eg: node15 will use credentials 15. used with statis group
+    # see hardcoded memberships
+    let hostname = getHostname()
+    let myId = parseInt(hostname[4..^1])
+    echo "using rln_index=", myId
 
     let rlnConf = WakuRlnConfig(
       rlnRelayDynamic: conf.rlnRelayDynamic,
-      rlnRelayCredIndex: conf.rlnRelayCredIndex,
+      rlnRelayCredIndex: some(myId.uint),
       rlnRelayEthContractAddress: conf.rlnRelayEthContractAddress,
       rlnRelayEthClientAddress: conf.rlnRelayEthClientAddress,
       rlnRelayCredPath: conf.rlnRelayCredPath,
@@ -539,9 +552,127 @@ proc startNode(node: WakuNode, conf: WakuNodeConf,
   if conf.keepAlive:
     node.startKeepalive()
 
+  # disable peer manager
   # Maintain relay connections
-  if conf.relay:
-    node.peerManager.start()
+  #if conf.relay:
+  #  node.peerManager.start()
+
+  # type used as payload in the WakuMessage
+  type MyMsg = object
+    nodeId: uint64
+    msgSeq: uint64
+    sentTs: uint64
+    payload: seq[byte]
+
+  proc encode(m: MyMsg): ProtoBuffer =
+    result = initProtoBuffer()
+    result.write(1, m.nodeId)
+    result.write(2, m.msgSeq)
+    result.write(3, m.sentTs)
+    result.write(4, m.payload)
+    result.finish()
+
+  proc decode(_: type MyMsg, buf: seq[byte]): Result[MyMsg, ProtoError] =
+    var res: MyMsg
+    let pb = initProtoBuffer(buf)
+    discard ? pb.getField(1, res.nodeId)
+    discard ? pb.getField(2, res.msgSeq)
+    discard ? pb.getField(3, res.sentTs)
+    discard ? pb.getField(3, res.payload)
+    ok(res)
+
+  # extract sent time from the message, log the difference
+  proc handler(pubsubTopic: PubsubTopic, data: WakuMessage) {.async, gcsafe.} =
+    let timeNow = getTime()
+    let decoded = MyMsg.decode(data.payload)
+    if decoded.isOk:
+      let
+        sentMoment = nanoseconds(int64(decoded.get.sentTs))
+        sentNanosecs = nanoseconds(sentMoment - seconds(sentMoment.seconds))
+        sentDate = initTime(sentMoment.seconds, sentNanosecs)
+        diff = timeNow - sentDate
+      echo "rx_msg msg_sender=", decoded.get.nodeId, " seq=" , decoded.get.msgSeq, " arrival_diff=", diff.inMilliseconds(), " milliseconds"
+
+  # subscribe and use handler. unsure why the cast is needed
+  discard procCall WakuRelay(node.wakuRelay).subscribe(conf.topics[0], handler)
+  await sleepAsync(1000.millis)
+
+  # get env
+  let totalPeers = parseInt(getEnv("PEERS"))
+  let connectTo = parseInt(getEnv("CONNECTTO"))
+  let numPublishers = parseInt(getEnv("NUMPUBLISHERS"))
+  let msgSizeInKb = parseInt(getEnv("MSGSIZEKBYTES"))
+
+  # peer hostname
+  let hostname = getHostname()
+  let myId = parseInt(hostname[4..^1])
+  var peersInfo = toSeq(1..totalPeers)
+  let rng = libp2p.newRng()
+  rng.shuffle(peersInfo)
+
+  echo "host_name=", hostname
+  echo "total_peers=", totalPeers
+  echo "connecting_to=", connectTo, " peers"
+  echo "number_publishers=", numPublishers
+  echo "msg_size_kytes=", msgSizeInKb
+
+  var connected = 0
+  for peerInfo in peersInfo:
+    if connected >= connectTo: break
+    let tAddress = "peer" & $peerInfo & ":60000"
+    echo "connecting_to=", tAddress
+    try:
+      let addrs = resolveTAddress(tAddress).mapIt(MultiAddress.init(it).tryGet())
+      echo "dialing_addrs=", addrs
+      let peerId = await node.switch.connect(addrs[0], allowUnknownPeerId=true).wait(5.seconds)
+      connected.inc()
+    except CatchableError as exc:
+      echo "error resolving/connecting", exc.msg
+
+  await sleepAsync(20.seconds)
+  echo "mesh_size=", node.wakuRelay.mesh.getOrDefault(conf.topics[0]).len, " topic=", conf.topics[0]
+  let (inPeers, outPeers) = node.peerManager.connectedPeers(WakuRelayCodec)
+  echo "connected_relay_in=", inPeers.len
+  echo "connected_relay_out=", outPeers.len
+
+  echo "sending messages"
+
+  # only some nodes publish. see NUMPUBLISHERS
+  if myId <= numPublishers:
+
+    let payload = urandom(msgSizeInKb * 1000)
+    echo "crafting message"
+    let
+      now = getTime()
+      nowInt = seconds(now.toUnix()) + nanoseconds(times.nanosecond(now))
+
+    let i = 0
+    # craft a message injecting the time it was generated
+    var message = WakuMessage(
+      payload: MyMsg(nodeId: myId.uint64,
+                     msgSeq: i.uint64,
+                     sentTs: nowInt.nanoseconds.uint64,
+                     payload: payload
+                     ).encode().buffer,
+      contentTopic: "content-topic",
+      version: 2,
+      timestamp: getTime().toUnix())
+
+    echo "appending proof"
+    let proofTime = getTime().toUnix()
+    echo "proofTime: ", proofTime
+    let success = node.wakuRlnRelay.appendRLNProof(message, float64(proofTime))
+    echo "proof attachedk ok/nok: ", success
+    echo "tx_msg seq=", i, " msg_sender=", myId
+    node.publish(some(conf.topics[0]), message).withTimeout(5.seconds)
+
+    # wait to avoid rate limiting
+    await sleepAsync(12.seconds)
+
+  # wait some time for gossip
+  await sleepAsync(30.seconds)
+  echo "ended_simulation"
+  quit(0)
 
   return ok()
 
@@ -567,9 +698,6 @@ proc startApp*(app: App): Future[AppResult[void]] {.async.} =
 
 proc startRestServer(app: App, address: ValidIpAddress, port: Port, conf: WakuNodeConf): AppResult[RestServerRef] =
   let server = ? newRestHttpServer(address, port)
-
-  ## Admin REST API
-  installAdminApiHandlers(server.router, app.node)
 
   ## Debug REST API
   installDebugApiHandlers(server.router, app.node)

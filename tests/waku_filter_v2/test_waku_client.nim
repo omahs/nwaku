@@ -18,7 +18,7 @@ import
   ../../../waku/waku_core,
   ../testlib/[common, wakucore, testasync, testutils, futures, sequtils],
   ./waku_filter_utils.nim,
-  ./test_data.nim
+  ../resources/payloads.nim
 
 let FUTURE_TIMEOUT = 1.seconds
 

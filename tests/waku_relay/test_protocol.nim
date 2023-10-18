@@ -1007,9 +1007,9 @@ suite "Waku Relay":
         msg1 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1024)) # 1KiB
         msg2 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(10*1024)) # 10KiB 
         msg3 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(100*1024)) # 100KiB
-        msg4 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1023*1024)) # 1MiB - 1B -> Max Size (Inclusive Limit)
-        msg5 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1024*1024)) # 1MiB      -> Max Size (Exclusive Limit)
-        msg6 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1025*1024)) # 1MiB + 1B -> Out of Max Size
+        msg4 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1024*1024 - 1)) # 1MiB - 1B -> Max Size (Inclusive Limit)
+        msg5 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1024*1024)) # 1MiB -> Max Size (Exclusive Limit)
+        msg6 = fakeWakuMessage(contentTopic=contentTopic, payload=getByteSequence(1024*1024 + 1)) # 1MiB + 1B -> Out of Max Size
       
       # When sending the 1KiB message
       handlerFuture = newPushHandlerFuture()
@@ -1064,7 +1064,7 @@ suite "Waku Relay":
       otherHandlerFuture = newPushHandlerFuture()
       discard await node.publish(pubsubTopic, msg5)
 
-      # Then the message is received in both nodes
+      # Then the message is not sent, only received in the node that sent it
       check:
         await handlerFuture.withTimeout(FUTURE_TIMEOUT)
         not await otherHandlerFuture.withTimeout(FUTURE_TIMEOUT)
@@ -1075,7 +1075,7 @@ suite "Waku Relay":
       otherHandlerFuture = newPushHandlerFuture()
       discard await node.publish(pubsubTopic, msg6)
 
-      # Then the message is received in both nodes
+      # Then the message is not sent, only received in the node that sent it
       check:
         await handlerFuture.withTimeout(FUTURE_TIMEOUT)
         not await otherHandlerFuture.withTimeout(FUTURE_TIMEOUT)
